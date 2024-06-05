@@ -6,3 +6,5 @@ scikit-learn
 ipykernel
 matplotlib
 plotly
+llama-index 
+llama-parse 
