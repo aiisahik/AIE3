@@ -3,14 +3,13 @@ import chainlit as cl
 from dotenv import load_dotenv
 from operator import itemgetter
 from langchain_huggingface import HuggingFaceEndpoint
-from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from langchain_core.prompts import PromptTemplate
-from langchain.schema.output_parser import StrOutputParser
-from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.runnable.config import RunnableConfig
+from llama_parse import LlamaParse
 
 # GLOBAL SCOPE - ENTIRE APPLICATION HAS ACCESS TO VALUES SET IN THIS SCOPE #
 # ---- ENV VARIABLES ---- # 
@@ -27,6 +26,7 @@ We will load our environment variables here.
 HF_LLM_ENDPOINT = os.environ["HF_LLM_ENDPOINT"]
 HF_EMBED_ENDPOINT = os.environ["HF_EMBED_ENDPOINT"]
 HF_TOKEN = os.environ["HF_TOKEN"]
+LLAMA_CLOUD_API_KEY = os.environ["LLAMA_CLOUD_API_KEY"]
 
 # ---- GLOBAL DECLARATIONS ---- #
 
@@ -39,29 +39,62 @@ HF_TOKEN = os.environ["HF_TOKEN"]
 """
 ### 1. CREATE TEXT LOADER AND LOAD DOCUMENTS
 ### NOTE: PAY ATTENTION TO THE PATH THEY ARE IN. 
-text_loader = 
-documents = 
+
+## THIS IS THE OLD WAY WITH THE STANDARD PyPDFLoader
+# document_loader = PyPDFLoader("./data/airbnb10k-2024q1.pdf")
+# documents = document_loader.load()
+
+
+## THIS IS THE NEW WAY WITH LlamaParse markdown loader
+llama_parser = LlamaParse(
+    api_key=LLAMA_CLOUD_API_KEY,  # can also be set in your env as LLAMA_CLOUD_API_KEY
+    result_type="markdown",  # "markdown" and "text" are available
+    verbose=True,
+    parsing_instruction = """
+        The provided document is a quarterly report filed by AirBNB,
+        with the Securities and Exchange Commission (SEC).
+        Some of the pages include detailed financial information about the company's performance for a specific quarter.
+        It includes unaudited financial statements, management discussion and analysis, and other relevant disclosures required by the SEC.
+        It contains many tables.
+        Try to be precise while answering the questions
+    """
+)
+
+llama_parse_documents = llama_parser.load_data("./data/airbnb10k-2024q1.pdf")
+documents = [doc.to_langchain_format() for doc in llama_parse_documents]
 
 ### 2. CREATE TEXT SPLITTER AND SPLIT DOCUMENTS
-text_splitter = 
-split_documents = 
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=30)
+split_documents = text_splitter.split_documents(documents)
 
 ### 3. LOAD HUGGINGFACE EMBEDDINGS
-hf_embeddings = 
-
-if os.path.exists("./data/vectorstore"):
-    vectorstore = FAISS.load_local(
-        "./data/vectorstore", 
-        hf_embeddings, 
-        allow_dangerous_deserialization=True # this is necessary to load the vectorstore from disk as it's stored as a `.pkl` file.
-    )
-    hf_retriever = vectorstore.as_retriever()
-    print("Loaded Vectorstore")
-else:
+hf_embeddings = HuggingFaceEndpointEmbeddings(
+    model=HF_EMBED_ENDPOINT,
+    task="feature-extraction",
+    huggingfacehub_api_token=HF_TOKEN,
+)
+vectorstore = None
+if os.path.exists("./vectorstore"):
+    num_files = len([entry for entry in os.listdir("./vectorstore") if os.path.isfile(os.path.join("./vectorstore", entry))])
+    if num_files > 0:
+        vectorstore = FAISS.load_local(
+            "./vectorstore", 
+            hf_embeddings, 
+            allow_dangerous_deserialization=True # this is necessary to load the vectorstore from disk as it's stored as a `.pkl` file.
+        )
+        hf_retriever = vectorstore.as_retriever()
+        print("Loaded Vectorstore")
+if vectorstore is None:
     print("Indexing Files")
-    os.makedirs("./data/vectorstore", exist_ok=True)
+    os.makedirs("./vectorstore", exist_ok=True)
     ### 4. INDEX FILES
     ### NOTE: REMEMBER TO BATCH THE DOCUMENTS WITH MAXIMUM BATCH SIZE = 32
+    for i in range(0, len(split_documents), 32):
+        if i == 0:
+            vectorstore = FAISS.from_documents(split_documents[i:i+32], hf_embeddings)
+            continue
+        print('adding documents to vector store', i, i+32, len(split_documents))
+        vectorstore.add_documents(split_documents[i:i+32])
 
 hf_retriever = vectorstore.as_retriever()
 
@@ -71,17 +104,38 @@ hf_retriever = vectorstore.as_retriever()
 2. Create a Prompt Template from the String Template
 """
 ### 1. DEFINE STRING TEMPLATE
-RAG_PROMPT_TEMPLATE = 
+RAG_PROMPT_TEMPLATE = """\
+<|start_header_id|>system<|end_header_id|>
+You are a helpful assistant. You answer user questions based on provided context. If you can't answer the question with the provided context, say you don't know.<|eot_id|>
+
+<|start_header_id|>user<|end_header_id|>
+User Query:
+{query}
+
+Context:
+{context}<|eot_id|>
+
+<|start_header_id|>assistant<|end_header_id|>
+"""
 
 ### 2. CREATE PROMPT TEMPLATE
-rag_prompt =
+rag_prompt = PromptTemplate.from_template(RAG_PROMPT_TEMPLATE)
 
 # -- GENERATION -- #
 """
 1. Create a HuggingFaceEndpoint for the LLM
 """
 ### 1. CREATE HUGGINGFACE ENDPOINT FOR LLM
-hf_llm = 
+hf_llm = HuggingFaceEndpoint(
+    endpoint_url=HF_LLM_ENDPOINT,
+    max_new_tokens=512,
+    top_k=10,
+    top_p=0.95,
+    typical_p=0.95,
+    temperature=0.01,
+    repetition_penalty=1.03,
+    huggingfacehub_api_token=HF_TOKEN
+)
 
 @cl.author_rename
 def rename(original_author: str):
@@ -91,7 +145,7 @@ def rename(original_author: str):
     In this case, we're overriding the 'Assistant' author to be 'Paul Graham Essay Bot'.
     """
     rename_dict = {
-        "Assistant" : "Paul Graham Essay Bot"
+        "Assistant" : "AirBnB Analyst Bot"
     }
     return rename_dict.get(original_author, original_author)
 
@@ -106,7 +160,9 @@ async def start_chat():
     """
 
     ### BUILD LCEL RAG CHAIN THAT ONLY RETURNS TEXT
-    lcel_rag_chain = 
+    lcel_rag_chain = lcel_rag_chain = {
+        "context": itemgetter("query") | hf_retriever, "query": itemgetter("query")
+    } | rag_prompt | hf_llm
 
     cl.user_session.set("lcel_rag_chain", lcel_rag_chain)
 

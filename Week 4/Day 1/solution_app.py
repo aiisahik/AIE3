@@ -51,7 +51,7 @@ hf_embeddings = HuggingFaceEndpointEmbeddings(
 
 if os.path.exists("./data/vectorstore"):
     vectorstore = FAISS.load_local(
-        "./data/vectorstore", 
+        "./vectorstore", 
         hf_embeddings, 
         allow_dangerous_deserialization=True # this is necessary to load the vectorstore from disk as it's stored as a `.pkl` file.
     )
@@ -59,7 +59,7 @@ if os.path.exists("./data/vectorstore"):
     print("Loaded Vectorstore")
 else:
     print("Indexing Files")
-    os.makedirs("./data/vectorstore", exist_ok=True)
+    os.makedirs("./vectorstore", exist_ok=True)
     for i in range(0, len(split_documents), 32):
         if i == 0:
             vectorstore = FAISS.from_documents(split_documents[i:i+32], hf_embeddings)
