@@ -1,0 +1,17 @@
+chainlit==1.1.305
+python-dotenv==1.0.1
+faiss-cpu
+qdrant-client
+llama-index-core 
+llama-index-readers-file
+nest-asyncio
+llama-index 
+anthropic
+wikipedia 
+llama-index-readers-wikipedia
+llama-index-vector-stores-qdrant
+sqlalchemy 
+pandas 
+wandb 
+llama-index-callbacks-wandb
+llama-index-llms-anthropic
